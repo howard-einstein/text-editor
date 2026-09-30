@@ -1,0 +1,434 @@
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+
+class TextEditor:
+    BACKGROUND = "#151916"
+    SURFACE = "#202621"
+    EDITOR_BACKGROUND = "#111512"
+    FOREGROUND = "#e2e8df"
+    MUTED = "#879187"
+    ACCENT = "#b8e986"
+    BORDER = "#303a32"
+
+    def __init__(self, root):
+        self.root = root
+        self.path = None
+        self.search_cursor = "1.0"
+        self.dirty = False
+
+        self.root.title("MARGIN | Untitled")
+        self.root.geometry("1100x720")
+        self.root.minsize(760, 480)
+        self.root.configure(background=self.BACKGROUND)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+        self._configure_style()
+        self._build_menu()
+        self._build_layout()
+        self._bind_shortcuts()
+        self.editor.focus_set()
+        self._update_status()
+        self._draw_line_numbers()
+
+    def _configure_style(self):
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("TFrame", background=self.BACKGROUND)
+        style.configure(
+            "Toolbar.TFrame", background=self.SURFACE, borderwidth=0
+        )
+        style.configure(
+            "TLabel",
+            background=self.BACKGROUND,
+            foreground=self.FOREGROUND,
+            font=("TkDefaultFont", 10),
+        )
+        style.configure(
+            "Toolbar.TLabel", background=self.SURFACE, foreground=self.FOREGROUND
+        )
+        style.configure(
+            "Brand.TLabel",
+            background=self.SURFACE,
+            foreground=self.ACCENT,
+            font=("TkDefaultFont", 13, "bold"),
+        )
+        style.configure(
+            "Muted.TLabel", background=self.BACKGROUND, foreground=self.MUTED
+        )
+        style.configure(
+            "TButton",
+            background=self.SURFACE,
+            foreground=self.FOREGROUND,
+            bordercolor=self.BORDER,
+            padding=(11, 7),
+            font=("TkDefaultFont", 9),
+        )
+        style.map(
+            "TButton",
+            background=[("active", "#303a32"), ("pressed", "#3a473d")],
+            foreground=[("disabled", self.MUTED)],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=self.ACCENT,
+            foreground="#182016",
+            bordercolor=self.ACCENT,
+            padding=(13, 7),
+            font=("TkDefaultFont", 9, "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#c9f39d"), ("pressed", "#a7d875")],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=self.EDITOR_BACKGROUND,
+            foreground=self.FOREGROUND,
+            insertcolor=self.ACCENT,
+            bordercolor=self.BORDER,
+            padding=8,
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=self.SURFACE,
+            troughcolor=self.EDITOR_BACKGROUND,
+            bordercolor=self.EDITOR_BACKGROUND,
+            arrowcolor=self.MUTED,
+        )
+
+    def _build_menu(self):
+        menu_bar = tk.Menu(
+            self.root,
+            background=self.SURFACE,
+            foreground=self.FOREGROUND,
+            activebackground=self.ACCENT,
+            activeforeground="#182016",
+            borderwidth=0,
+        )
+        file_menu = tk.Menu(menu_bar, tearoff=False)
+        file_menu.add_command(label="New", accelerator="Ctrl+N", command=self.new_file)
+        file_menu.add_command(label="Open...", accelerator="Ctrl+O", command=self.open_file)
+        file_menu.add_separator()
+        file_menu.add_command(label="Save", accelerator="Ctrl+S", command=self.save_file)
+        file_menu.add_command(
+            label="Save As...", accelerator="Ctrl+Shift+S", command=self.save_file_as
+        )
+        file_menu.add_separator()
+        file_menu.add_command(label="Quit", command=self.close)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+
+        edit_menu = tk.Menu(menu_bar, tearoff=False)
+        edit_menu.add_command(label="Undo", accelerator="Ctrl+Z", command=self._undo)
+        edit_menu.add_command(label="Redo", accelerator="Ctrl+Y", command=self._redo)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Find and Replace", accelerator="Ctrl+F", command=self.show_find)
+        menu_bar.add_cascade(label="Edit", menu=edit_menu)
+        self.root.config(menu=menu_bar)
+
+    def _build_layout(self):
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(2, weight=1)
+
+        toolbar = ttk.Frame(self.root, style="Toolbar.TFrame", padding=(18, 12))
+        toolbar.grid(row=0, column=0, sticky="ew")
+        toolbar.columnconfigure(1, weight=1)
+        ttk.Label(toolbar, text="MARGIN", style="Brand.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 18)
+        )
+        self.document_label = ttk.Label(toolbar, text="Untitled", style="Toolbar.TLabel")
+        self.document_label.grid(row=0, column=1, sticky="w")
+
+        actions = ttk.Frame(toolbar, style="Toolbar.TFrame")
+        actions.grid(row=0, column=2, sticky="e")
+        ttk.Button(actions, text="New", command=self.new_file).pack(side="left", padx=3)
+        ttk.Button(actions, text="Open", command=self.open_file).pack(side="left", padx=3)
+        ttk.Button(actions, text="Find", command=self.show_find).pack(side="left", padx=3)
+        ttk.Button(
+            actions, text="Save", style="Accent.TButton", command=self.save_file
+        ).pack(side="left", padx=(5, 0))
+
+        self.find_bar = ttk.Frame(self.root, padding=(18, 10))
+        self.find_bar.columnconfigure(0, weight=1)
+        self.find_entry = ttk.Entry(self.find_bar)
+        self.find_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.find_entry.bind("<Return>", self._find_next)
+        self.find_entry.bind("<Shift-Return>", self._find_previous)
+        ttk.Button(self.find_bar, text="Next", command=self._find_next).grid(
+            row=0, column=1, padx=3
+        )
+        ttk.Button(self.find_bar, text="Replace", command=self._replace).grid(
+            row=0, column=2, padx=3
+        )
+        ttk.Button(self.find_bar, text="Close", command=self.hide_find).grid(
+            row=0, column=3, padx=(3, 0)
+        )
+
+        editor_frame = ttk.Frame(self.root, style="TFrame")
+        editor_frame.grid(row=2, column=0, sticky="nsew")
+        editor_frame.columnconfigure(1, weight=1)
+        editor_frame.rowconfigure(0, weight=1)
+
+        self.gutter = tk.Canvas(
+            editor_frame,
+            width=56,
+            background=self.EDITOR_BACKGROUND,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.gutter.grid(row=0, column=0, sticky="nsew")
+        self.editor = tk.Text(
+            editor_frame,
+            wrap=tk.WORD,
+            undo=True,
+            maxundo=-1,
+            autoseparators=True,
+            background=self.EDITOR_BACKGROUND,
+            foreground=self.FOREGROUND,
+            insertbackground=self.ACCENT,
+            selectbackground="#3e5940",
+            selectforeground=self.FOREGROUND,
+            font=("TkFixedFont", 12),
+            padx=14,
+            pady=18,
+            spacing1=2,
+            spacing3=2,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.editor.grid(row=0, column=1, sticky="nsew")
+        self.editor.tag_configure("search_match", background="#526845", foreground="#ffffff")
+        self.scrollbar = ttk.Scrollbar(
+            editor_frame, orient="vertical", command=self.editor.yview
+        )
+        self.scrollbar.grid(row=0, column=2, sticky="ns")
+        self.editor.configure(yscrollcommand=self._on_scroll)
+        self.editor.bind("<<Modified>>", self._on_modified)
+        self.editor.bind("<KeyRelease>", self._update_status)
+        self.editor.bind("<ButtonRelease-1>", self._update_status)
+        self.editor.bind("<Configure>", lambda _event: self._draw_line_numbers())
+        self.editor.edit_modified(False)
+
+        status = ttk.Frame(self.root, padding=(18, 8))
+        status.grid(row=3, column=0, sticky="ew")
+        status.columnconfigure(0, weight=1)
+        self.position_label = ttk.Label(status, text="Ln 1, Col 1", style="Muted.TLabel")
+        self.position_label.grid(row=0, column=0, sticky="w")
+        self.count_label = ttk.Label(status, text="0 words", style="Muted.TLabel")
+        self.count_label.grid(row=0, column=1, sticky="e", padx=(0, 18))
+        ttk.Label(status, text="UTF-8", style="Muted.TLabel").grid(row=0, column=2)
+
+    def _bind_shortcuts(self):
+        self.root.bind("<Control-n>", lambda _event: self.new_file())
+        self.root.bind("<Control-o>", lambda _event: self.open_file())
+        self.root.bind("<Control-s>", lambda _event: self.save_file())
+        self.root.bind("<Control-Shift-S>", lambda _event: self.save_file_as())
+        self.root.bind("<Control-f>", lambda _event: self.show_find())
+        self.root.bind("<F3>", self._find_next)
+        self.root.bind("<Escape>", lambda _event: self.hide_find())
+
+    def _is_dirty(self):
+        return self.dirty
+
+    def _update_title(self):
+        name = self.path.name if self.path else "Untitled"
+        dirty_marker = " *" if self._is_dirty() else ""
+        self.document_label.configure(text=f"{name}{dirty_marker}")
+        self.root.title(f"MARGIN | {name}{dirty_marker}")
+
+    def _on_modified(self, _event=None):
+        if self.editor.edit_modified():
+            self.dirty = True
+            self.editor.edit_modified(False)
+            self._update_title()
+            self._update_status()
+            self._draw_line_numbers()
+
+    def _on_scroll(self, first, last):
+        self.scrollbar.set(first, last)
+        self._draw_line_numbers()
+
+    def _draw_line_numbers(self):
+        if not hasattr(self, "editor"):
+            return
+        self.gutter.delete("all")
+        line = int(self.editor.index("@0,0").split(".")[0])
+        while True:
+            info = self.editor.dlineinfo(f"{line}.0")
+            if info is None:
+                break
+            y = info[1] + info[3] // 2
+            self.gutter.create_text(
+                43,
+                y,
+                anchor="e",
+                text=str(line),
+                fill=self.MUTED,
+                font=("TkFixedFont", 10),
+            )
+            line += 1
+
+    def _update_status(self, _event=None):
+        if not hasattr(self, "editor"):
+            return
+        line, column = self.editor.index("insert").split(".")
+        content = self.editor.get("1.0", "end-1c")
+        words = len(content.split())
+        self.position_label.configure(text=f"Ln {line}, Col {int(column) + 1}")
+        self.count_label.configure(text=f"{words:,} word{'s' if words != 1 else ''}")
+
+    def _confirm_discard(self):
+        if not self._is_dirty():
+            return True
+        answer = messagebox.askyesnocancel(
+            "Unsaved changes",
+            "Save your changes before continuing?",
+            parent=self.root,
+        )
+        if answer is None:
+            return False
+        return self.save_file() if answer else True
+
+    def _set_document(self, content, path=None):
+        self.editor.delete("1.0", tk.END)
+        self.editor.insert("1.0", content)
+        self.editor.edit_reset()
+        self.editor.edit_modified(False)
+        self.dirty = False
+        self.path = path
+        self.search_cursor = "1.0"
+        self._update_title()
+        self._update_status()
+        self._draw_line_numbers()
+
+    def new_file(self):
+        if self._confirm_discard():
+            self._set_document("")
+            self.editor.focus_set()
+
+    def open_file(self):
+        if not self._confirm_discard():
+            return
+        file_path = filedialog.askopenfilename(
+            parent=self.root,
+            filetypes=[("Text files", "*.txt *.md *.py *.rst *.log"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            content = Path(file_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            messagebox.showerror("Could not open file", str(error), parent=self.root)
+            return
+        self._set_document(content, Path(file_path))
+
+    def save_file(self):
+        if self.path is None:
+            return self.save_file_as()
+        return self._write_file(self.path)
+
+    def save_file_as(self):
+        file_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return False
+        return self._write_file(Path(file_path))
+
+    def _write_file(self, path):
+        try:
+            path.write_text(self.editor.get("1.0", "end-1c"), encoding="utf-8")
+        except OSError as error:
+            messagebox.showerror("Could not save file", str(error), parent=self.root)
+            return False
+        self.path = path
+        self.dirty = False
+        self.editor.edit_modified(False)
+        self._update_title()
+        return True
+
+    def show_find(self):
+        self.find_bar.grid(row=1, column=0, sticky="ew")
+        self.find_entry.focus_set()
+        self.find_entry.selection_range(0, tk.END)
+        selected = self.editor.tag_ranges(tk.SEL)
+        if selected:
+            self.find_entry.insert(0, self.editor.get(*selected))
+            self.find_entry.selection_range(0, tk.END)
+        self.search_cursor = self.editor.index("insert")
+
+    def hide_find(self):
+        self.find_bar.grid_remove()
+        self.editor.tag_remove("search_match", "1.0", tk.END)
+        self.editor.focus_set()
+
+    def _find_next(self, _event=None):
+        query = self.find_entry.get()
+        if not query:
+            return "break"
+        start = self.search_cursor
+        match = self.editor.search(query, start, stopindex=tk.END, nocase=True)
+        if not match:
+            match = self.editor.search(query, "1.0", stopindex=start, nocase=True)
+        self.editor.tag_remove("search_match", "1.0", tk.END)
+        if match:
+            end = f"{match}+{len(query)}c"
+            self.editor.tag_add("search_match", match, end)
+            self.editor.mark_set("insert", end)
+            self.editor.see(match)
+            self.search_cursor = end
+            self._update_status()
+        return "break"
+
+    def _find_previous(self, _event=None):
+        query = self.find_entry.get()
+        if not query:
+            return "break"
+        match = self.editor.search(
+            query, self.editor.index("insert - 1c"), stopindex="1.0", backwards=True, nocase=True
+        )
+        if not match:
+            match = self.editor.search(
+                query, tk.END, stopindex=self.editor.index("insert"), backwards=True, nocase=True
+            )
+        if match:
+            end = f"{match}+{len(query)}c"
+            self.editor.tag_remove("search_match", "1.0", tk.END)
+            self.editor.tag_add("search_match", match, end)
+            self.editor.mark_set("insert", match)
+            self.editor.see(match)
+            self.search_cursor = match
+        return "break"
+
+    def _replace(self):
+        selected = self.editor.tag_ranges("search_match")
+        if selected:
+            self.editor.delete(*selected)
+            self.editor.insert("insert", self.find_entry.get())
+        self.search_cursor = self.editor.index("insert")
+        self._find_next()
+
+    def _undo(self):
+        try:
+            self.editor.edit_undo()
+        except tk.TclError:
+            pass
+
+    def _redo(self):
+        try:
+            self.editor.edit_redo()
+        except tk.TclError:
+            pass
+
+    def close(self):
+        if self._confirm_discard():
+            self.root.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TextEditor(root)
+    root.mainloop()
